@@ -4,6 +4,7 @@
 #include <SDL3/SDL.h>
 #ifdef __EMSCRIPTEN__
 #include <GLES3/gl3.h>
+#include <emscripten/html5.h>
 #else
 #include <SDL3/SDL_opengl.h>
 #include <GL/gl.h>
@@ -144,6 +145,12 @@ void Renderer::setVideoMode(x86::reg32 w, x86::reg32 h, x86::reg32 bpp)
     m_width = w;
     m_height = h;
     m_depth = bpp;
+#ifdef __EMSCRIPTEN__
+    // Under -sPROXY_TO_PTHREAD SDL does not size the page canvas, so both it and
+    // the OFFSCREEN_FRAMEBUFFER back buffer stay 0x0 and nothing composites.
+    // Size them to the game's video mode explicitly (proxied to the main thread).
+    emscripten_set_canvas_element_size("#canvas", int(w), int(h));
+#endif
     setCurrent();
     glBindTexture(GL_TEXTURE_2D, m_texture);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, m_width, m_height, 0, GL_RGB, GL_UNSIGNED_SHORT_5_6_5, nullptr);

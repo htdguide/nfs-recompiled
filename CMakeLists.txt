@@ -199,11 +199,15 @@ function(add_game_exe name)
         endif()
 
         target_link_options(${name} PRIVATE
-            # main() (window + the blocking SDL_WaitEvent message pump) stays on
-            # the browser main thread: SDL3's Emscripten backend touches `document`
-            # from the calling thread during video/event init, which only exists
-            # there. ASYNCIFY lets the blocking pump yield to the browser event
-            # loop; the game's own worker threads (CPU + GL) run as real pthreads.
+            # The game blocks on SDL_WaitEvent and drives GL from worker threads.
+            # Running main() on a pthread (PROXY_TO_PTHREAD) lets those blocking
+            # calls behave as on desktop and lets emscripten proxy the workers' GL
+            # to the main-thread WebGL context (with OFFSCREEN_FRAMEBUFFER below).
+            # SDL3's experimental port registers a few event handlers with EM_ASM
+            # that touch `document` on the worker; web/pthread-dom-shim.js installs
+            # an inert document/window there so those blocks don't throw.
+            "-sPROXY_TO_PTHREAD"
+            "SHELL:--pre-js ${CMAKE_SOURCE_DIR}/web/pthread-dom-shim.js"
             "-sEXIT_RUNTIME=0"
             # threads: the game creates a handful of workers on demand.
             "-sPTHREAD_POOL_SIZE=8"
@@ -216,6 +220,9 @@ function(add_game_exe name)
             # The game creates and drives its GL context from a worker pthread,
             # but the WebGL context lives on the browser main thread. This routes
             # GL calls from the worker to the main-thread context.
+            # (OffscreenCanvas transfer was tried but does not fit: the game
+            # renders from a thread it spawns itself, not the one the canvas would
+            # be transferred to, which stalls rendering.)
             "-sOFFSCREEN_FRAMEBUFFER=1"
             # memory: the recompiled game maps a large flat address space.
             "-sALLOW_MEMORY_GROWTH=1"

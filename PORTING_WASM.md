@@ -62,13 +62,38 @@ WebGL has none of these. Added a `__EMSCRIPTEN__` path:
 - `serve.py` — static server sending COOP/COEP headers (required for threads).
 - `README.md` — build & run instructions.
 
+## Threading model on the web
+
+`nfs2se` boots with real NFS II: SE data and runs its logic on worker pthreads.
+Getting there needed two more decisions beyond the initial port:
+
+- **`-sPROXY_TO_PTHREAD`** — main() (window + the blocking `SDL_WaitEvent` pump)
+  runs on a pthread; emscripten proxies the workers' GL to the browser main
+  thread's WebGL context (`-sOFFSCREEN_FRAMEBUFFER=1`).
+- **`web/pthread-dom-shim.js`** (a `--pre-js`) — SDL3's *experimental* Emscripten
+  port registers some event handlers with plain `EM_ASM` blocks that touch
+  `document` on the calling (worker) thread, where it doesn't exist. The shim
+  installs an inert `document`/`window` on the worker so those blocks don't throw.
+  Without it the game aborts at the menu with "document is not defined".
+
+Tried and rejected: `-sOFFSCREENCANVAS_SUPPORT` + `OFFSCREENCANVASES_TO_PTHREAD`.
+The canvas is transferred to one pthread, but the game renders from a *different*
+thread it spawns itself, which stalls rendering.
+
 ## Status / TODO
 
-- [x] `nfs_core` compiles to wasm.
-- [x] Full game disassembly compiles to wasm.
-- [ ] Link a game target end-to-end.
-- [ ] Boot in-browser (verify with real game data mounted at `/data`).
+- [x] `nfs_core` + full game disassembly compile to wasm.
+- [x] Link `nfs2se` end-to-end (.html/.js/.wasm/.data).
+- [x] Boot in-browser with real NFS II: SE data preloaded at `/data`.
+- [x] Runs game logic + audio (SDL3 ScriptProcessorNode) without crashing.
+- [ ] **Present frames to the visible canvas.** Open issue: under
+  `PROXY_TO_PTHREAD`, SDL3's port never sizes the page canvas (it stays 0x0) and
+  the `OFFSCREEN_FRAMEBUFFER` frames rendered on the worker are not composited to
+  it, so the canvas is black even though the game is running. Calling
+  `emscripten_set_canvas_element_size("#canvas", …)` from the worker in
+  `Renderer::setVideoMode` does not take effect across the thread boundary.
+  Likely needs a fix in how `SDL_GL_SwapWindow` commits the proxied frame, or a
+  patched SDL3 build. This is the main remaining blocker to seeing the menu.
 - [ ] Networking: `wsock32`/sockets stubs for browser (multiplayer disabled).
-- [ ] Audio: confirm SDL3 audio under the AudioWorklet path + user-gesture start.
 - [ ] Runtime FS: file-picker → IDBFS so users can supply data without rebuild.
 - [ ] Verify GLES shader output matches desktop (palette byte order, blit V flip).
