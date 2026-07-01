@@ -4,3 +4,6 @@ build
 # WebAssembly build output
 /build-web/
 /build/
+
+# local game data (copyrighted, do not commit)
+/gamedata-nfs2/

@@ -211,6 +211,10 @@ function(add_game_exe name)
             "-sMAX_WEBGL_VERSION=2"
             "-sFULL_ES3=1"
             "-sGL_ENABLE_GET_PROC_ADDRESS=1"
+            # The game creates and drives its GL context from a worker pthread,
+            # but the WebGL context lives on the browser main thread. This routes
+            # GL calls from the worker to the main-thread context.
+            "-sOFFSCREEN_FRAMEBUFFER=1"
             # memory: the recompiled game maps a large flat address space.
             "-sALLOW_MEMORY_GROWTH=1"
             "-sINITIAL_MEMORY=536870912"

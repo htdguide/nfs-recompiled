@@ -58,8 +58,20 @@ WindowClass::~WindowClass()
 {
 }
 
+static SDL_Window* createGlWindow(const char* title, int w, int h)
+{
+#ifdef __EMSCRIPTEN__
+    // Request an OpenGL ES 3.0 context so SDL creates a WebGL 2 context; WebGL 1
+    // cannot compile the #version 300 es shaders. Must be set before the window.
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
+#endif
+    return SDL_CreateWindow(title, w, h, SDL_WINDOW_RESIZABLE|SDL_WINDOW_OPENGL);
+}
+
 Window::Window(const char *title, int /*x*/, int /*y*/, int w, int h)
-    :   m_window(SDL_CreateWindow(title, w, h, SDL_WINDOW_RESIZABLE|SDL_WINDOW_OPENGL))
+    :   m_window(createGlWindow(title, w, h))
 {
     if (!m_window)
     {
