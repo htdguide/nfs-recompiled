@@ -199,9 +199,11 @@ function(add_game_exe name)
         endif()
 
         target_link_options(${name} PRIVATE
-            # The game blocks on SDL_WaitEvent and spawns worker threads, so the
-            # whole program runs on a pthread off the browser main thread.
-            "-sPROXY_TO_PTHREAD"
+            # main() (window + the blocking SDL_WaitEvent message pump) stays on
+            # the browser main thread: SDL3's Emscripten backend touches `document`
+            # from the calling thread during video/event init, which only exists
+            # there. ASYNCIFY lets the blocking pump yield to the browser event
+            # loop; the game's own worker threads (CPU + GL) run as real pthreads.
             "-sEXIT_RUNTIME=0"
             # threads: the game creates a handful of workers on demand.
             "-sPTHREAD_POOL_SIZE=8"
