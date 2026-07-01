@@ -86,14 +86,25 @@ thread it spawns itself, which stalls rendering.
 - [x] Link `nfs2se` end-to-end (.html/.js/.wasm/.data).
 - [x] Boot in-browser with real NFS II: SE data preloaded at `/data`.
 - [x] Runs game logic + audio (SDL3 ScriptProcessorNode) without crashing.
-- [ ] **Present frames to the visible canvas.** Open issue: under
-  `PROXY_TO_PTHREAD`, SDL3's port never sizes the page canvas (it stays 0x0) and
-  the `OFFSCREEN_FRAMEBUFFER` frames rendered on the worker are not composited to
-  it, so the canvas is black even though the game is running. Calling
-  `emscripten_set_canvas_element_size("#canvas", …)` from the worker in
-  `Renderer::setVideoMode` does not take effect across the thread boundary.
-  Likely needs a fix in how `SDL_GL_SwapWindow` commits the proxied frame, or a
-  patched SDL3 build. This is the main remaining blocker to seeing the menu.
+- [x] Canvas sizing / present pipeline wired up: `Renderer::setVideoMode` sizes
+  the emscripten offscreen buffer *and* the DOM canvas (main thread, via
+  `MAIN_THREAD_EM_ASM`); `web/shell.html` clamps the canvas so it never drops to
+  0x0; web present renders at the game resolution and lets CSS letterbox; vsync
+  is disabled on the web (`SDL_GL_SetSwapInterval(0)`) because vsync needs a
+  registered emscripten main loop.
+- [ ] **Game renders only one frame, then stalls.** Current blocker. With SE
+  data the sequence is: `setVideoMode 640x480` → `unlock(0)` → `present #1` →
+  then no further `unlock`/`swap`/`present`. Verified with logging that SDL
+  timers *do* fire continuously and worker threads stay alive but mostly blocked
+  (low syscall activity), and keypresses do not trigger a redraw. So the frontend
+  is not an interactive static menu waiting on input — it is stuck early (note
+  `joycal.cfg` is also missing) in intro/attract or device init, waiting on a
+  synchronization primitive or a DirectDraw flip-complete signal that the port
+  does not raise. Next: trace `winapp.cpp`'s message pump + the DirectDraw
+  `Flip`/`unlock` path and the thread that owns the frontend to find what it
+  blocks on. Whether the single presented frame actually composites (vs. being a
+  genuinely black first frame) can only be confirmed once the game advances far
+  enough to draw non-black content.
 - [ ] Networking: `wsock32`/sockets stubs for browser (multiplayer disabled).
 - [ ] Runtime FS: file-picker → IDBFS so users can supply data without rebuild.
 - [ ] Verify GLES shader output matches desktop (palette byte order, blit V flip).

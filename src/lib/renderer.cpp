@@ -5,6 +5,7 @@
 #ifdef __EMSCRIPTEN__
 #include <GLES3/gl3.h>
 #include <emscripten/html5.h>
+#include <emscripten.h>
 #else
 #include <SDL3/SDL_opengl.h>
 #include <GL/gl.h>
@@ -104,7 +105,11 @@ Renderer::Renderer(WinApplication* application, Window *window)
     ,   m_colorPalette()
 {
     setCurrent();
+#ifdef __EMSCRIPTEN__
+    SDL_GL_SetSwapInterval(0);
+#else
     SDL_GL_SetSwapInterval(1);
+#endif
 #ifndef __EMSCRIPTEN__
     // Debug output and fixed-function GL_TEXTURE_2D enable do not exist in
     // WebGL/GLES; texturing is driven entirely by the shader on that path.
@@ -149,7 +154,16 @@ void Renderer::setVideoMode(x86::reg32 w, x86::reg32 h, x86::reg32 bpp)
     // Under -sPROXY_TO_PTHREAD SDL does not size the page canvas, so both it and
     // the OFFSCREEN_FRAMEBUFFER back buffer stay 0x0 and nothing composites.
     // Size them to the game's video mode explicitly (proxied to the main thread).
-    emscripten_set_canvas_element_size("#canvas", int(w), int(h));
+    // Size the emscripten offscreen back buffer (proxied GL target)...
+    EMSCRIPTEN_RESULT r = emscripten_set_canvas_element_size("#canvas", int(w), int(h));
+    // ...and the actual DOM canvas backing store on the main thread. The proxied
+    // call above only resizes the offscreen buffer; the DOM canvas the browser
+    // composites stays 0x0 unless we set it here, which leaves the screen black.
+    MAIN_THREAD_EM_ASM({
+        var c = Module['canvas'];
+        if (c) { c.width = $0; c.height = $1; }
+    }, int(w), int(h));
+    (void)r;
 #endif
     setCurrent();
     glBindTexture(GL_TEXTURE_2D, m_texture);
@@ -180,6 +194,14 @@ void Renderer::present()
     glBindTexture(GL_TEXTURE_2D, m_texture);
     int w, h;
     SDL_GetWindowSizeInPixels(m_window->m_window, &w, &h);
+#ifdef __EMSCRIPTEN__
+    // The page canvas backing store is sized to the game resolution (see
+    // setVideoMode) and CSS "object-fit: contain" letterboxes it to the display,
+    // so render to the whole backing store; SDL's window size is the CSS size and
+    // must not be used here.
+    w = int(m_width);
+    h = int(m_height);
+#endif
 
     float gameAspect = float(m_width) / float(m_height);
     float windowAspect = float(w) / float(h);
@@ -302,6 +324,15 @@ void Renderer::unlock(x86::reg32 index)
 void Renderer::swap()
 {
     setCurrent();
+#ifdef __EMSCRIPTEN__
+    // No vsync on the web: SDL_GL_SetSwapInterval(1) needs a registered
+    // emscripten main loop (hence the "no main loop" warnings) and can wedge the
+    // render thread after the first frame. The browser composites the canvas on
+    // its own schedule, so present unthrottled and let the game pace itself.
+    SDL_GL_SetSwapInterval(0);
+    m_currentBuffer = 1 - m_currentBuffer;
+    update();
+#else
     const SDL_DisplayMode* mode = SDL_GetCurrentDisplayMode(SDL_GetPrimaryDisplay());
     SDL_GL_SetSwapInterval(1);
     m_currentBuffer = 1 - m_currentBuffer;
@@ -310,6 +341,7 @@ void Renderer::swap()
         // We enabled vsync and now render until we have a refresh rate of 30
         update();
     }
+#endif
     clearCurrent();
 }
 

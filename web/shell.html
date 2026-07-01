@@ -28,6 +28,25 @@
   </div>
 </div>
 <script>
+  // Keep the canvas backing store non-zero. Under -sPROXY_TO_PTHREAD SDL/emscripten
+  // may momentarily reset the canvas to 0x0, which makes the composited frame
+  // blank; clamp any 0 assignment up to the game resolution while still letting
+  // the native setter resize the WebGL drawing buffer for real sizes.
+  (function () {
+    var proto = HTMLCanvasElement.prototype;
+    var wd = Object.getOwnPropertyDescriptor(proto, 'width');
+    var hd = Object.getOwnPropertyDescriptor(proto, 'height');
+    var c = document.getElementById('canvas');
+    Object.defineProperty(c, 'width',  { configurable: true,
+      get: function () { return wd.get.call(this); },
+      set: function (v) { wd.set.call(this, (v && v > 0) ? v : 640); } });
+    Object.defineProperty(c, 'height', { configurable: true,
+      get: function () { return hd.get.call(this); },
+      set: function (v) { hd.set.call(this, (v && v > 0) ? v : 480); } });
+    if (!(c.width > 0)) c.width = 640;
+    if (!(c.height > 0)) c.height = 480;
+  })();
+
   var statusEl = document.getElementById('status');
   var Module = {
     canvas: (function () {
