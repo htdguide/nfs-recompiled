@@ -8,6 +8,10 @@
 # define __restrict__ __restrict
 # define NFS2_ASSERT(x)         \
     if (! (x)) __debugbreak()
+#elif defined(__EMSCRIPTEN__) || defined(__wasm__)
+// WebAssembly has no int3 breakpoint instruction; trap the same way instead.
+# define NFS2_ASSERT(x)         \
+    if (! (x)) __builtin_trap()
 #else
 # define NFS2_ASSERT(x)         \
     if (! (x)) asm("int3")

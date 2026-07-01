@@ -43,6 +43,70 @@ static PFNGLBINDRENDERBUFFERPROC glBindRenderbuffer;
 static PFNGLRENDERBUFFERSTORAGEPROC glRenderbufferStorage;
 static PFNGLDRAWBUFFERSPROC glDrawBuffers;
 
+#ifdef __EMSCRIPTEN__
+// WebGL 2 speaks GLSL ES 3.00: needs the "es" profile, explicit fragment
+// precision, texture() instead of texture2D(), and float (not int) literals in
+// clamp/mix. The logic is otherwise identical to the desktop #version 400 code.
+static const char g_glVertexShader[] = ""
+"#version 300 es\n"
+"in vec3 g_position;"
+"in vec4 g_color;"
+"in vec2 g_texCoord;"
+"in vec4 g_combine;"
+"in vec4 g_atlasInfo;"
+"out vec3 v_texCoord;"
+"out vec4 v_color;"
+"flat out vec4 v_combine;"
+"flat out vec4 v_atlasInfo;"
+"uniform mat4 u_transform;"
+"void main()"
+"{"
+"    v_texCoord = vec3(g_texCoord.st, g_combine.q);"
+"    v_combine = g_combine;"
+"    v_color = g_color;"
+"    v_atlasInfo = g_atlasInfo;"
+"    gl_Position = u_transform * vec4(g_position, 1.0);"
+"}";
+
+static const char g_glFragmentShader[] =
+"#version 300 es\n"
+"precision highp float;"
+"in vec3 v_texCoord;"
+"in vec4 v_color;"
+"flat in vec4 v_combine;"
+"flat in vec4 v_atlasInfo;"
+"layout (location=0) out vec4 o_color;"
+"uniform sampler2D u_texture;"
+""
+"vec4 getColor(vec2 coords)"
+"{"
+"    vec2 texCoords = (v_atlasInfo.pq + clamp(coords, 0.0, v_atlasInfo.t-1.0))/v_atlasInfo.s;"
+"    return texture(u_texture, texCoords);"
+"}"
+"void main()"
+"{"
+"    vec2 texelPos = (v_texCoord.st/v_texCoord.p)*v_atlasInfo.t/(256.0);"
+"    vec2 tex1mod = mod(vec2(texelPos.x-0.25, texelPos.y-0.25), v_atlasInfo.t);"
+"    vec2 tex2mod = mod(vec2(texelPos.x+0.25, texelPos.y-0.25), v_atlasInfo.t);"
+"    vec2 tex3mod = mod(vec2(texelPos.x-0.25, texelPos.y+0.25), v_atlasInfo.t);"
+"    vec2 tex4mod = mod(vec2(texelPos.x+0.25, texelPos.y+0.25), v_atlasInfo.t);"
+"    vec2 tex1clamp = clamp(vec2(texelPos.x-0.25, texelPos.y-0.25), 0.0, v_atlasInfo.t);"
+"    vec2 tex2clamp = clamp(vec2(texelPos.x+0.25, texelPos.y-0.25), 0.0, v_atlasInfo.t);"
+"    vec2 tex3clamp = clamp(vec2(texelPos.x-0.25, texelPos.y+0.25), 0.0, v_atlasInfo.t);"
+"    vec2 tex4clamp = clamp(vec2(texelPos.x+0.25, texelPos.y+0.25), 0.0, v_atlasInfo.t);"
+"    vec2 tex1 = mix(tex1clamp, tex1mod, v_combine.p);"
+"    vec2 tex2 = mix(tex2clamp, tex2mod, v_combine.p);"
+"    vec2 tex3 = mix(tex3clamp, tex3mod, v_combine.p);"
+"    vec2 tex4 = mix(tex4clamp, tex4mod, v_combine.p);"
+"    vec4 c1 = mix(getColor(tex1), getColor(tex2), 0.5);"
+"    vec4 c2 = mix(getColor(tex3), getColor(tex4), 0.5);"
+"    vec4 textureColor = mix(c1, c2, 0.5);"
+"    vec4 color = vec4(mix(v_color.rgb, v_color.rgb * textureColor.rgb, v_combine.s),"
+"                      mix(v_color.a, v_color.a * textureColor.a, v_combine.t));"
+"    if (color.a < 0.0625) discard;"
+"    o_color = color;"
+"}";
+#else
 static const char g_glVertexShader[] = ""
 "#version 400\n"
 "in vec3 g_position;"
@@ -101,6 +165,7 @@ static const char g_glFragmentShader[] =
 "    if (color.a < 0.0625) discard;"
 "    o_color = color;"
 "}";
+#endif
 
 struct GlVertex
 {
@@ -348,14 +413,29 @@ void GlideRenderer::swap()
     {
         flush();
         glViewport(0, 0, m_renderer->m_width, m_renderer->m_height);
+        glUseProgram(m_shaderProgram);
+        float matrix[16];
+#ifdef __EMSCRIPTEN__
+        // GLES has no fixed-function matrix stack. Build the same projection
+        // glOrtho(0, w, 0, h, 0, -65536) would have produced, column-major.
+        const float w = float(m_renderer->m_width);
+        const float h = float(m_renderer->m_height);
+        for (int i = 0; i < 16; ++i) matrix[i] = 0.0f;
+        matrix[0]  = 2.0f / w;          // 2/(r-l)
+        matrix[5]  = 2.0f / h;          // 2/(t-b)
+        matrix[10] = 2.0f / 65536.0f;   // -2/(f-n), f=-65536 n=0
+        matrix[12] = -1.0f;             // -(r+l)/(r-l)
+        matrix[13] = -1.0f;             // -(t+b)/(t-b)
+        matrix[14] = -1.0f;             // -(f+n)/(f-n)
+        matrix[15] = 1.0f;
+#else
         glMatrixMode(GL_PROJECTION);
         glLoadIdentity();
         glOrtho(0, m_renderer->m_width, 0, m_renderer->m_height, 0, -65536.0f);
         glMatrixMode(GL_MODELVIEW);
         glLoadIdentity();
-        glUseProgram(m_shaderProgram);
-        float matrix[16];
         glGetFloatv(GL_PROJECTION_MATRIX, matrix);
+#endif
         glUniformMatrix4fv(m_transform, 1, GL_FALSE, matrix);
         glBindTexture(GL_TEXTURE_2D, m_atlas);
         glBindBuffer(GL_ARRAY_BUFFER, m_vertexBuffer);

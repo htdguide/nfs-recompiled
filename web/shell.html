@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>Need for Speed — WebAssembly</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #101014; color: #d0d0d8;
+               font-family: system-ui, sans-serif; overflow: hidden; }
+  #wrap { display: flex; flex-direction: column; height: 100%; }
+  #bar  { padding: 6px 10px; font-size: 13px; background: #17171d;
+          border-bottom: 1px solid #2a2a33; }
+  #stage { flex: 1; display: flex; align-items: center; justify-content: center; }
+  canvas { background: #000; width: 100%; height: 100%; object-fit: contain;
+           display: block; outline: none; }
+  #status { color: #8a8; }
+  a { color: #6cf; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="bar">
+    NFS-recompiled (WASM) — <span id="status">loading…</span>
+    &nbsp;·&nbsp; requires original game data mounted at <code>/data</code>
+  </div>
+  <div id="stage">
+    <canvas id="canvas" tabindex="-1" oncontextmenu="event.preventDefault()"></canvas>
+  </div>
+</div>
+<script>
+  var statusEl = document.getElementById('status');
+  var Module = {
+    canvas: (function () {
+      var c = document.getElementById('canvas');
+      // Emscripten reports WebGL context loss through this listener.
+      c.addEventListener('webglcontextlost', function (e) {
+        alert('WebGL context lost. Reload to continue.');
+        e.preventDefault();
+      }, false);
+      return c;
+    })(),
+    arguments: ['/data'],           // data + "cd" both point at the mounted dir
+    print:    function (t) { console.log(t); },
+    printErr: function (t) { console.error(t); },
+    setStatus: function (t) { statusEl.textContent = t || 'running'; },
+    totalDependencies: 0,
+    monitorRunDependencies: function (left) {
+      this.setStatus(left ? ('preparing… ' + left + ' files left') : 'running');
+    }
+  };
+  Module.setStatus('downloading…');
+  window.onerror = function (msg) { Module.setStatus('error — see console'); };
+</script>
+{{{ SCRIPT }}}
+</body>
+</html>

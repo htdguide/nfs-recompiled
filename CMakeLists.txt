@@ -25,8 +25,23 @@ else()
     set(TARGET_WINDOWS FALSE)
 endif()
 
+# Detect the Emscripten/WebAssembly target. CMake sets EMSCRIPTEN when the
+# project is configured with the emcmake wrapper (or the Emscripten toolchain
+# file). On this target we render through WebGL 2 and rely on the bundled
+# SDL3 emscripten port instead of a system SDL3.
+if(EMSCRIPTEN)
+    set(TARGET_WEB TRUE)
+    add_compile_definitions(TARGET_WEB __EMSCRIPTEN__)
+else()
+    set(TARGET_WEB FALSE)
+endif()
+
 if (MSVC)
     add_compile_options(/W4 /WX)
+elseif(TARGET_WEB)
+    # The generated disassembly is huge and trips a slightly different clang
+    # warning set under emscripten; keep warnings but do not fail the build.
+    add_compile_options(-Wall -Wextra -Wstrict-aliasing=2 -Wno-unused-command-line-argument)
 else()
     add_compile_options(-Wall -Wextra -Werror -Wstrict-aliasing=2)
 endif()
@@ -40,25 +55,49 @@ if(TARGET_WINDOWS)
     set(SDL3_DIR "${CMAKE_SOURCE_DIR}/sdl3/cmake" CACHE PATH "SDL3 CMake directory")
 endif()
 
-find_package(SDL3 REQUIRED)
-find_package(OpenGL REQUIRED)
+if(TARGET_WEB)
+    # ---------------------------------------------------------------------
+    # WebAssembly / Emscripten backend
+    # ---------------------------------------------------------------------
+    # SDL3 and OpenGL ES/WebGL are provided by the Emscripten SDL3 port; there
+    # is nothing to find_package(). We expose an INTERFACE target that carries
+    # the flags every translation unit needs (SDL3 headers + pthreads), and a
+    # matching empty GL target so the rest of the file stays backend-agnostic.
+    add_library(nfs_web_flags INTERFACE)
+    # -msimd128 lets emscripten emulate the SSE/MMX intrinsics used by mmx.h and
+    # the recompiled code (immintrin.h) on top of WebAssembly SIMD.
+    target_compile_options(nfs_web_flags INTERFACE
+        "-sUSE_SDL=3" "-pthread" "-msimd128"
+        "-msse" "-msse2" "-msse3" "-mssse3" "-msse4.1")
+    target_link_options(nfs_web_flags INTERFACE "-sUSE_SDL=3" "-pthread")
 
-# prefer modern imported targets if available
-if(TARGET SDL3::SDL3)
-    set(SDL3_LIB_TARGET SDL3::SDL3)
-else()
-    include_directories(${SDL3_INCLUDE_DIRS})
-    set(SDL3_LIB_TARGET ${SDL3_LIBRARIES})
-endif()
-
-# SDL3main provides the WinMain→main entry-point shim required on Windows.
-# The modern config exposes it as a separate target; the legacy FindSDL3.cmake
-# already folds it into SDL3_LIBRARIES, so we only add it on top for the
-# imported-target path.
-if(TARGET SDL3::SDL3main)
-    set(SDL3_MAIN_TARGET SDL3::SDL3main)
-else()
+    set(SDL3_LIB_TARGET  nfs_web_flags)
     set(SDL3_MAIN_TARGET "")
+    add_library(nfs_gl_target INTERFACE)   # GL is folded into the SDL3 port
+    set(GL_LIB_TARGET    nfs_gl_target)
+else()
+    find_package(SDL3 REQUIRED)
+    find_package(OpenGL REQUIRED)
+
+    # prefer modern imported targets if available
+    if(TARGET SDL3::SDL3)
+        set(SDL3_LIB_TARGET SDL3::SDL3)
+    else()
+        include_directories(${SDL3_INCLUDE_DIRS})
+        set(SDL3_LIB_TARGET ${SDL3_LIBRARIES})
+    endif()
+
+    # SDL3main provides the WinMain→main entry-point shim required on Windows.
+    # The modern config exposes it as a separate target; the legacy
+    # FindSDL3.cmake already folds it into SDL3_LIBRARIES, so we only add it on
+    # top for the imported-target path.
+    if(TARGET SDL3::SDL3main)
+        set(SDL3_MAIN_TARGET SDL3::SDL3main)
+    else()
+        set(SDL3_MAIN_TARGET "")
+    endif()
+
+    set(GL_LIB_TARGET OpenGL::GL)
 endif()
 
 file(GLOB NFS2SE_DISASM_SOURCES
@@ -107,7 +146,7 @@ endif()
 add_library(nfs_core STATIC ${LIB_CPP_SOURCES})
 target_include_directories(nfs_core PRIVATE
     ${CMAKE_SOURCE_DIR}/include)
-target_link_libraries(nfs_core PRIVATE ${SDL3_MAIN_TARGET} ${SDL3_LIB_TARGET} OpenGL::GL)
+target_link_libraries(nfs_core PUBLIC ${SDL3_MAIN_TARGET} ${SDL3_LIB_TARGET} ${GL_LIB_TARGET})
 
 # helper function for adding the game executables
 function(add_game_exe name)
@@ -137,12 +176,49 @@ function(add_game_exe name)
         ${game_src_dir}
         ${CMAKE_SOURCE_DIR}/src/${name}/disassembly
         ${CMAKE_SOURCE_DIR}/include)
-    target_link_libraries(${name} PRIVATE ${SDL3_MAIN_TARGET} nfs_core ${SDL3_LIB_TARGET} OpenGL::GL)
+    target_link_libraries(${name} PRIVATE ${SDL3_MAIN_TARGET} nfs_core ${SDL3_LIB_TARGET} ${GL_LIB_TARGET})
     if(WITH_PEDANTIC_FPU)
         target_compile_definitions(${name} PRIVATE WITH_PEDANTIC_FPU)
     endif()
     if(WITH_MMX)
         target_compile_definitions(${name} PRIVATE WITH_MMX)
+    endif()
+
+    if(TARGET_WEB)
+        # Emit a ready-to-serve .html shell alongside the .js/.wasm/.data.
+        set_target_properties(${name} PROPERTIES SUFFIX ".html")
+
+        # Optional game data directory to bake into the virtual filesystem.
+        # Pass -DNFS_DATA_DIR=/abs/path/to/gamefiles at configure time.
+        set(NFS_PRELOAD_OPTS "")
+        if(NFS_DATA_DIR AND EXISTS "${NFS_DATA_DIR}")
+            message(STATUS "${name}: preloading game data from ${NFS_DATA_DIR}")
+            list(APPEND NFS_PRELOAD_OPTS "SHELL:--preload-file ${NFS_DATA_DIR}@/data")
+        else()
+            message(STATUS "${name}: no NFS_DATA_DIR set — build will need data mounted at runtime")
+        endif()
+
+        target_link_options(${name} PRIVATE
+            # The game blocks on SDL_WaitEvent and spawns worker threads, so the
+            # whole program runs on a pthread off the browser main thread.
+            "-sPROXY_TO_PTHREAD"
+            "-sEXIT_RUNTIME=0"
+            # threads: the game creates a handful of workers on demand.
+            "-sPTHREAD_POOL_SIZE=8"
+            "-sPTHREAD_POOL_SIZE_STRICT=0"
+            # WebGL 2 with GLES3 emulation for the shader + immediate paths.
+            "-sMIN_WEBGL_VERSION=2"
+            "-sMAX_WEBGL_VERSION=2"
+            "-sFULL_ES3=1"
+            "-sGL_ENABLE_GET_PROC_ADDRESS=1"
+            # memory: the recompiled game maps a large flat address space.
+            "-sALLOW_MEMORY_GROWTH=1"
+            "-sINITIAL_MEMORY=536870912"
+            "-sSTACK_SIZE=8388608"
+            "-sASYNCIFY"
+            "-sASSERTIONS=1"
+            "SHELL:--shell-file ${CMAKE_SOURCE_DIR}/web/shell.html"
+            ${NFS_PRELOAD_OPTS})
     endif()
 endfunction()
 

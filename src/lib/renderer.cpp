@@ -2,12 +2,17 @@
 #include <lib/window.h>
 #include <lib/gamepad.h>
 #include <SDL3/SDL.h>
+#ifdef __EMSCRIPTEN__
+#include <GLES3/gl3.h>
+#else
 #include <SDL3/SDL_opengl.h>
 #include <GL/gl.h>
+#endif
 
 namespace win32
 {
 
+#ifndef __EMSCRIPTEN__
 void GLAPIENTRY errorCallback(GLenum /*source*/, GLenum type, GLuint /*id*/, GLenum severity, GLsizei /*length*/, const GLchar* message, const void* /*userParam*/)
 {
     if (severity != GL_DEBUG_SEVERITY_NOTIFICATION)
@@ -16,6 +21,77 @@ void GLAPIENTRY errorCallback(GLenum /*source*/, GLenum type, GLuint /*id*/, GLe
             type, severity, message);
 }
 PFNGLDEBUGMESSAGECALLBACKPROC glDebugMessageCallback;
+#endif
+
+#ifdef __EMSCRIPTEN__
+// ---------------------------------------------------------------------------
+// WebGL fullscreen blit. Desktop GL uses fixed-function glBegin/glOrtho to draw
+// the software-rendered frame; WebGL has no immediate mode, so we lazily build
+// a tiny shader + triangle-strip quad and reuse it every present().
+// ---------------------------------------------------------------------------
+namespace
+{
+GLuint s_blitProgram = 0;
+GLuint s_blitVbo     = 0;
+GLint  s_blitPosLoc  = -1;
+GLint  s_blitUvLoc   = -1;
+
+GLuint compileBlitShader(GLenum type, const char* src)
+{
+    GLuint sh = glCreateShader(type);
+    glShaderSource(sh, 1, &src, nullptr);
+    glCompileShader(sh);
+    GLint ok = 0;
+    glGetShaderiv(sh, GL_COMPILE_STATUS, &ok);
+    if (!ok)
+    {
+        char log[512];
+        glGetShaderInfoLog(sh, sizeof(log), nullptr, log);
+        SDL_LogError(SDL_LOG_CATEGORY_RENDER, "blit shader: %s", log);
+    }
+    return sh;
+}
+
+void ensureBlitProgram()
+{
+    if (s_blitProgram)
+        return;
+
+    static const char* vs =
+        "attribute vec2 a_pos;"
+        "attribute vec2 a_uv;"
+        "varying vec2 v_uv;"
+        "void main(){ v_uv = a_uv; gl_Position = vec4(a_pos, 0.0, 1.0); }";
+    static const char* fs =
+        "precision mediump float;"
+        "varying vec2 v_uv;"
+        "uniform sampler2D u_tex;"
+        "void main(){ gl_FragColor = texture2D(u_tex, v_uv); }";
+
+    s_blitProgram = glCreateProgram();
+    GLuint v = compileBlitShader(GL_VERTEX_SHADER, vs);
+    GLuint f = compileBlitShader(GL_FRAGMENT_SHADER, fs);
+    glAttachShader(s_blitProgram, v);
+    glAttachShader(s_blitProgram, f);
+    glLinkProgram(s_blitProgram);
+    s_blitPosLoc = glGetAttribLocation(s_blitProgram, "a_pos");
+    s_blitUvLoc  = glGetAttribLocation(s_blitProgram, "a_uv");
+
+    // Fullscreen triangle strip. UV v is flipped so the game's top-left texture
+    // origin maps to the top of the viewport (desktop used glOrtho(0,w,h,0)).
+    static const float quad[] = {
+        //  x     y     u     v
+        -1.f, -1.f, 0.f, 1.f,
+         1.f, -1.f, 1.f, 1.f,
+        -1.f,  1.f, 0.f, 0.f,
+         1.f,  1.f, 1.f, 0.f,
+    };
+    glGenBuffers(1, &s_blitVbo);
+    glBindBuffer(GL_ARRAY_BUFFER, s_blitVbo);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_STATIC_DRAW);
+}
+} // namespace
+#endif
 
 Renderer::Renderer(WinApplication* application, Window *window)
     :   m_application(application)
@@ -28,16 +104,22 @@ Renderer::Renderer(WinApplication* application, Window *window)
 {
     setCurrent();
     SDL_GL_SetSwapInterval(1);
+#ifndef __EMSCRIPTEN__
+    // Debug output and fixed-function GL_TEXTURE_2D enable do not exist in
+    // WebGL/GLES; texturing is driven entirely by the shader on that path.
     glDebugMessageCallback = (PFNGLDEBUGMESSAGECALLBACKPROC)SDL_GL_GetProcAddress("glDebugMessageCallback");
     if (glDebugMessageCallback)
     {
         glEnable(GL_DEBUG_OUTPUT);
         glDebugMessageCallback(errorCallback, 0);
     }
+#endif
 
     glGenTextures(1, &m_texture);
     glBindTexture(GL_TEXTURE_2D, m_texture);
+#ifndef __EMSCRIPTEN__
     glEnable(GL_TEXTURE_2D);
+#endif
 
     clearCurrent();
 }
@@ -116,6 +198,20 @@ void Renderer::present()
 
     // Render the game texture into the aspect-ratio-correct viewport
     glViewport(vpX, vpY, vpW, vpH);
+#ifdef __EMSCRIPTEN__
+    ensureBlitProgram();
+    glUseProgram(s_blitProgram);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, m_texture);
+    glBindBuffer(GL_ARRAY_BUFFER, s_blitVbo);
+    glEnableVertexAttribArray(GLuint(s_blitPosLoc));
+    glVertexAttribPointer(GLuint(s_blitPosLoc), 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(GLuint(s_blitUvLoc));
+    glVertexAttribPointer(GLuint(s_blitUvLoc), 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)(2 * sizeof(float)));
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    glFlush();
+    SDL_GL_SwapWindow(m_window->m_window);
+#else
     glMatrixMode(GL_PROJECTION);
     glLoadIdentity();
     glOrtho(0, m_width, m_height, 0, -1.0f, 1.0f);
@@ -139,6 +235,7 @@ void Renderer::present()
     glEnd();
     glFlush();
     SDL_GL_SwapWindow(m_window->m_window);
+#endif
 }
 
 void Renderer::update()
@@ -160,7 +257,20 @@ void Renderer::update()
             screenData[i] = m_colorPalette[srcData[i]];
         }
         //MemMap::fillDebugGraph(screenData + m_width*2);
+#ifdef __EMSCRIPTEN__
+        // WebGL/GLES lacks GL_UNSIGNED_INT_8_8_8_8. Byte-swap each pixel so the
+        // resulting little-endian byte order (R,G,B,A) matches what desktop GL
+        // produced from the packed uint, then upload as plain UNSIGNED_BYTE.
+        for (x86::reg32 i = 0; i < m_width*m_height; ++i)
+        {
+            x86::reg32 p = screenData[i];
+            screenData[i] = ((p & 0xFF000000u) >> 24) | ((p & 0x00FF0000u) >> 8)
+                          | ((p & 0x0000FF00u) << 8)  | ((p & 0x000000FFu) << 24);
+        }
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, m_width, m_height, 0, GL_RGBA, GL_UNSIGNED_BYTE, screenData);
+#else
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, m_width, m_height, 0, GL_RGBA, GL_UNSIGNED_INT_8_8_8_8, screenData);
+#endif
         free(screenData);
     }
     present();
