@@ -487,6 +487,24 @@ void GlideRenderer::swap()
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     m_renderer->present();
+#ifdef __EMSCRIPTEN__
+    // The game calls grBufferSwap(1): on real 3dfx hardware that BLOCKS until
+    // the next vertical blank, pacing the render loop to the display. Our web
+    // swap returns immediately, so the loop free-runs and re-renders duplicate
+    // frames between the game's fixed-rate simulation ticks (observed: ~100
+    // presents/s with ~30 distinct frames). Emulate the vblank wait with a
+    // 60 Hz clock — no visible change, big CPU saving.
+    {
+        static Uint64 s_nextFrameNs = 0;
+        const Uint64 frameNs = 1000000000ull / 60;
+        Uint64 now = SDL_GetTicksNS();
+        if (s_nextFrameNs == 0 || now > s_nextFrameNs + frameNs)
+            s_nextFrameNs = now;           // first frame or fell behind: resync
+        s_nextFrameNs += frameNs;
+        if (now < s_nextFrameNs)
+            SDL_DelayNS(s_nextFrameNs - now);
+    }
+#endif
     m_renderer->clearCurrent();
     m_vertexCount = 0;
 }
