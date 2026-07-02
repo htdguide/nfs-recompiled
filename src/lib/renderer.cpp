@@ -161,7 +161,15 @@ void Renderer::setVideoMode(x86::reg32 w, x86::reg32 h, x86::reg32 bpp)
     // composites stays 0x0 unless we set it here, which leaves the screen black.
     MAIN_THREAD_EM_ASM({
         var c = Module['canvas'];
-        if (c) { c.width = $0; c.height = $1; }
+        if (c) {
+            // __gameResize: the shell ignores canvas resizes from anyone but the
+            // game (see web/shell.html) so fullscreen/SDL can't desync the DOM
+            // canvas from the offscreen GL buffer.
+            c.__gameResize = true;
+            c.width = $0;
+            c.height = $1;
+            c.__gameResize = false;
+        }
     }, int(w), int(h));
     (void)r;
 #endif
@@ -329,13 +337,24 @@ void Renderer::swap()
 {
     setCurrent();
 #ifdef __EMSCRIPTEN__
-    // No vsync on the web: SDL_GL_SetSwapInterval(1) needs a registered
-    // emscripten main loop (hence the "no main loop" warnings) and can wedge the
-    // render thread after the first frame. The browser composites the canvas on
-    // its own schedule, so present unthrottled and let the game pace itself.
+    // No blockable vblank on a worker thread: SDL_GL_SetSwapInterval(1) needs a
+    // registered emscripten main loop, and the browser composites the canvas on
+    // its own (display-synced) schedule anyway. Emulate vsync by pacing frames
+    // to the game's native 30 fps with a clock — same effect as the desktop
+    // path's "render until we hit 30 Hz" vsync loop, without burning CPU.
     SDL_GL_SetSwapInterval(0);
     m_currentBuffer = 1 - m_currentBuffer;
     update();
+    {
+        static Uint64 s_nextFrameNs = 0;
+        const Uint64 frameNs = 1000000000ull / 30;
+        Uint64 now = SDL_GetTicksNS();
+        if (s_nextFrameNs == 0 || now > s_nextFrameNs + frameNs)
+            s_nextFrameNs = now;           // first frame or fell behind: resync
+        s_nextFrameNs += frameNs;
+        if (now < s_nextFrameNs)
+            SDL_DelayNS(s_nextFrameNs - now);
+    }
 #else
     const SDL_DisplayMode* mode = SDL_GetCurrentDisplayMode(SDL_GetPrimaryDisplay());
     SDL_GL_SetSwapInterval(1);

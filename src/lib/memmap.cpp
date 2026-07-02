@@ -47,7 +47,10 @@ static void dealloc(void* mem, x86::reg32 size)
 
 static void protect(void* mem, x86::reg32 size, bool read, bool write)
 {
-#ifdef _WIN32
+#if defined(_WIN32) || defined(__EMSCRIPTEN__)
+    // WebAssembly linear memory has no page protection: emscripten's mprotect is
+    // an unsupported-syscall stub that only spams a console warning per call
+    // (tens of thousands per minute at runtime). Memory is always read+write.
     NFS2_USE(mem);
     NFS2_USE(size);
     NFS2_USE(read);

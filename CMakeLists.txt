@@ -228,8 +228,11 @@ function(add_game_exe name)
             "-sALLOW_MEMORY_GROWTH=1"
             "-sINITIAL_MEMORY=536870912"
             "-sSTACK_SIZE=8388608"
+            # ASYNCIFY is still required: the SDL3 emscripten port suspends in a
+            # few init paths even though main() runs on a pthread — without it
+            # the game stalls before video init.
             "-sASYNCIFY"
-            "-sASSERTIONS=1"
+            "-O3"
             "SHELL:--shell-file ${CMAKE_SOURCE_DIR}/web/shell.html"
             ${NFS_PRELOAD_OPTS})
     endif()
