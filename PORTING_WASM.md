@@ -92,19 +92,28 @@ thread it spawns itself, which stalls rendering.
   0x0; web present renders at the game resolution and lets CSS letterbox; vsync
   is disabled on the web (`SDL_GL_SetSwapInterval(0)`) because vsync needs a
   registered emscripten main loop.
-- [ ] **Game renders only one frame, then stalls.** Current blocker. With SE
-  data the sequence is: `setVideoMode 640x480` → `unlock(0)` → `present #1` →
-  then no further `unlock`/`swap`/`present`. Verified with logging that SDL
-  timers *do* fire continuously and worker threads stay alive but mostly blocked
-  (low syscall activity), and keypresses do not trigger a redraw. So the frontend
-  is not an interactive static menu waiting on input — it is stuck early (note
-  `joycal.cfg` is also missing) in intro/attract or device init, waiting on a
-  synchronization primitive or a DirectDraw flip-complete signal that the port
-  does not raise. Next: trace `winapp.cpp`'s message pump + the DirectDraw
-  `Flip`/`unlock` path and the thread that owns the frontend to find what it
-  blocks on. Whether the single presented frame actually composites (vs. being a
-  genuinely black first frame) can only be confirmed once the game advances far
-  enough to draw non-black content.
+- [ ] **Game renders only one frame, then stalls before the menu.** Current
+  blocker, traced fairly far:
+  - Sequence: `setVideoMode 640x480` → `unlock(0)` → `present #1` → no further
+    `unlock`/`swap`/`present`.
+  - The infrastructure is all alive: SDL timers fire continuously; the main
+    thread's message pump (`GetMessageA` → `Window::getMessage` → `SDL_WaitEvent`)
+    keeps receiving events, including the game's *own* recurring posted user
+    events (`g_userEvent`, type `0x8000`). So the frontend message loop is
+    ticking, not deadlocked.
+  - No winapi call is blocking: `Flip`/`Lock`/`Unlock` don't wait, and the game
+    never calls `GetFlipStatus`/`GetBltStatus` (those are `NFS2_ASSERT(false)` and
+    would trap — no trap occurs). `GetMessageA` correctly drops the global
+    execution mutex while waiting, so workers aren't GIL-starved.
+  - Conclusion: the stall is inside the game's own recompiled frontend/intro
+    state machine, not the SDL/DirectDraw/GL support layer. Most likely the
+    intro/attract (FMV) sequence is waiting on something the port doesn't drive
+    (e.g. a movie-playback completion), so it keeps ticking its message loop
+    without ever drawing another frame. `joycal.cfg` is also missing.
+  - Next: identify the `0x8000` user-event handler in the recompiled `nfs2se`
+    frontend and what state it is spinning in (e.g. FMV/intro), and either make
+    that path advance (stub the movie step to signal "done") or find the config
+    that skips the intro. This is game-logic RE, separate from the port itself.
 - [ ] Networking: `wsock32`/sockets stubs for browser (multiplayer disabled).
 - [ ] Runtime FS: file-picker → IDBFS so users can supply data without rebuild.
 - [ ] Verify GLES shader output matches desktop (palette byte order, blit V flip).
