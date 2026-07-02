@@ -407,8 +407,13 @@ void GlideRenderer::swap()
     m_renderer->setCurrent();
     glBindFramebuffer(GL_FRAMEBUFFER, m_framebuffer);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_renderer->m_texture, 0);
+#ifndef __EMSCRIPTEN__
+    // Not on the web: swap interval is a no-op without an emscripten main loop,
+    // and both calls proxy to the browser main thread — per-frame cost for
+    // nothing. The browser composites display-synced on its own.
     const SDL_DisplayMode* mode = SDL_GetCurrentDisplayMode(SDL_GetPrimaryDisplay());
     SDL_GL_SetSwapInterval(mode ? (int)(mode->refresh_rate / 60) : 1);
+#endif
     if (m_vertexCount)
     {
         flush();

@@ -27,6 +27,7 @@
   <div id="bar">
     <button id="fsbtn" title="Fullscreen (or double-click the game)">⛶ fullscreen</button>
     NFS-recompiled (WASM) — <span id="status">loading…</span>
+    &nbsp;·&nbsp; <span id="fps">– fps</span>
     &nbsp;·&nbsp; requires original game data mounted at <code>/data</code>
   </div>
   <div id="stage">
@@ -91,6 +92,13 @@
   };
   Module.setStatus('downloading…');
   window.onerror = function (msg) { Module.setStatus('error — see console'); };
+
+  // FPS readout: the renderer bumps window.__nfsFrames once per presented frame.
+  setInterval(function () {
+    var f = window.__nfsFrames | 0;
+    window.__nfsFrames = 0;
+    document.getElementById('fps').textContent = f + ' fps';
+  }, 1000);
 </script>
 {{{ SCRIPT }}}
 </body>

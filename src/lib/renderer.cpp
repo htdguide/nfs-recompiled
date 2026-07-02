@@ -252,6 +252,9 @@ void Renderer::present()
     // only reaches the visible canvas when the frame is explicitly committed.
     // SDL_GL_SwapWindow does not do this under the proxied-to-pthread context.
     emscripten_webgl_commit_frame();
+    // Presented-frame counter for the FPS readout in the shell (cheap: one
+    // atomic-ish JS increment per frame, read out once a second by the page).
+    MAIN_THREAD_ASYNC_EM_ASM({ window.__nfsFrames = (window.__nfsFrames | 0) + 1; });
 #else
     glMatrixMode(GL_PROJECTION);
     glLoadIdentity();
@@ -327,7 +330,9 @@ void Renderer::unlock(x86::reg32 index)
     if (index == 0)
     {
         setCurrent();
+#ifndef __EMSCRIPTEN__
         SDL_GL_SetSwapInterval(0);
+#endif
         update();
         clearCurrent();
     }
@@ -339,15 +344,15 @@ void Renderer::swap()
 #ifdef __EMSCRIPTEN__
     // No blockable vblank on a worker thread: SDL_GL_SetSwapInterval(1) needs a
     // registered emscripten main loop, and the browser composites the canvas on
-    // its own (display-synced) schedule anyway. Emulate vsync by pacing frames
-    // to the game's native 30 fps with a clock — same effect as the desktop
-    // path's "render until we hit 30 Hz" vsync loop, without burning CPU.
-    SDL_GL_SetSwapInterval(0);
+    // its own (display-synced) schedule anyway. Emulate vsync by capping flips
+    // at 60 Hz with a clock — stops a free-running flip loop from burning a
+    // core while letting the game run at full display rate. (The desktop path
+    // deliberately slows this to 30 Hz; the browser feels better at 60.)
     m_currentBuffer = 1 - m_currentBuffer;
     update();
     {
         static Uint64 s_nextFrameNs = 0;
-        const Uint64 frameNs = 1000000000ull / 30;
+        const Uint64 frameNs = 1000000000ull / 60;
         Uint64 now = SDL_GetTicksNS();
         if (s_nextFrameNs == 0 || now > s_nextFrameNs + frameNs)
             s_nextFrameNs = now;           // first frame or fell behind: resync
