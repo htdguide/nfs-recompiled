@@ -56,6 +56,9 @@ README). Two ways to provide them:
 1. **Bake at build time** — pass `-DNFS_DATA_DIR=/path/to/gamefiles` at configure
    time. The files are preloaded into Emscripten's virtual FS at `/data`, and the
    HTML shell launches the game with `/data` as both the install and CD path.
+   The directory must contain `FEDATA/`, `GAMEDATA/`, `install.win` (SE CDs ship
+   it as `INSTALL.NFS` — rename it), and `NFS2SEN.EXE` — the game's CD check
+   verifies its own executable exists on the "CD" and quits without it.
 2. **Mount at runtime** — extend `web/shell.html` to populate MEMFS/IDBFS before
    the module starts (e.g. from a file picker). Not wired up yet.
 

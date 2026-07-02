@@ -240,6 +240,10 @@ void Renderer::present()
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
     glFlush();
     SDL_GL_SwapWindow(m_window->m_window);
+    // With -sOFFSCREEN_FRAMEBUFFER the drawing goes to an offscreen buffer; it
+    // only reaches the visible canvas when the frame is explicitly committed.
+    // SDL_GL_SwapWindow does not do this under the proxied-to-pthread context.
+    emscripten_webgl_commit_frame();
 #else
     glMatrixMode(GL_PROJECTION);
     glLoadIdentity();

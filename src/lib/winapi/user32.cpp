@@ -377,8 +377,16 @@ int MessageBoxA(WinApplication* app, x86::CPU& cpu,
     if (uType & 0x0001) type |= SDL_MESSAGEBOX_ERROR;
     if (uType & 0x0002) type |= SDL_MESSAGEBOX_WARNING;
     if (uType & 0x0000) type |= SDL_MESSAGEBOX_INFORMATION;
+#ifdef __EMSCRIPTEN__
+    // A message box on a worker cannot pop a real dialog; log it (it is usually
+    // the reason the game then quits) and continue.
+    SDL_Log("[web] MessageBoxA caption=\"%s\" text=\"%s\"",
+            lpCaption ? lpCaption : "(null)", lpText ? lpText : "(null)");
+    return 1; // IDOK
+#else
     SDL_ShowSimpleMessageBox(type, lpCaption, lpText, nullptr);
     return 0;
+#endif
 }
 
 BOOL OffsetRect(WinApplication* app, x86::CPU& cpu,

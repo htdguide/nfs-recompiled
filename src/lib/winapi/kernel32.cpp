@@ -1,5 +1,6 @@
 #include <winapi/kernel32.h>
 #include <x86.h>
+#include <SDL3/SDL.h>
 #include <lib/memmap.h>
 #include <lib/mutex.h>
 #include <lib/event.h>

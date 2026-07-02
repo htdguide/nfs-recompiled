@@ -92,28 +92,21 @@ thread it spawns itself, which stalls rendering.
   0x0; web present renders at the game resolution and lets CSS letterbox; vsync
   is disabled on the web (`SDL_GL_SetSwapInterval(0)`) because vsync needs a
   registered emscripten main loop.
-- [ ] **Game renders only one frame, then stalls before the menu.** Current
-  blocker, traced fairly far:
-  - Sequence: `setVideoMode 640x480` → `unlock(0)` → `present #1` → no further
-    `unlock`/`swap`/`present`.
-  - The infrastructure is all alive: SDL timers fire continuously; the main
-    thread's message pump (`GetMessageA` → `Window::getMessage` → `SDL_WaitEvent`)
-    keeps receiving events, including the game's *own* recurring posted user
-    events (`g_userEvent`, type `0x8000`). So the frontend message loop is
-    ticking, not deadlocked.
-  - No winapi call is blocking: `Flip`/`Lock`/`Unlock` don't wait, and the game
-    never calls `GetFlipStatus`/`GetBltStatus` (those are `NFS2_ASSERT(false)` and
-    would trap — no trap occurs). `GetMessageA` correctly drops the global
-    execution mutex while waiting, so workers aren't GIL-starved.
-  - Conclusion: the stall is inside the game's own recompiled frontend/intro
-    state machine, not the SDL/DirectDraw/GL support layer. Most likely the
-    intro/attract (FMV) sequence is waiting on something the port doesn't drive
-    (e.g. a movie-playback completion), so it keeps ticking its message loop
-    without ever drawing another frame. `joycal.cfg` is also missing.
-  - Next: identify the `0x8000` user-event handler in the recompiled `nfs2se`
-    frontend and what state it is spinning in (e.g. FMV/intro), and either make
-    that path advance (stub the movie step to signal "done") or find the config
-    that skips the intro. This is game-logic RE, separate from the port itself.
+- [x] **Game runs and renders in the browser.** Two final blockers, both solved:
+  1. *Silent quit after one frame.* Traced via the message stream: the game
+     posted `WM_DESTROY`/`WM_QUIT` after `MessageBoxA("…you must have the game
+     CD in the CD-ROM drive")` — a CD check. The check is simply
+     `GetFileAttributesA("D:\NFS2SEN.EXE")`: the game verifies its own
+     executable exists on the CD. Fix: include `NFS2SEN.EXE` in the data
+     directory baked into `/data`. (On a worker `MessageBoxA` cannot pop a real
+     dialog; it now logs the text and returns IDOK, which is also how the abort
+     reason was found.)
+  2. *Frames never composited.* With `-sOFFSCREEN_FRAMEBUFFER`, rendering goes
+     to an offscreen buffer that only reaches the visible canvas via an explicit
+     `emscripten_webgl_commit_frame()`; `SDL_GL_SwapWindow` does not do this for
+     a proxied context. `Renderer::present` now calls it after the swap — the
+     intro FMV, menus, audio and input all work in the browser.
+- [ ] `joycal.cfg` missing (joystick calibration; harmless, game continues).
 - [ ] Networking: `wsock32`/sockets stubs for browser (multiplayer disabled).
 - [ ] Runtime FS: file-picker → IDBFS so users can supply data without rebuild.
 - [ ] Verify GLES shader output matches desktop (palette byte order, blit V flip).
